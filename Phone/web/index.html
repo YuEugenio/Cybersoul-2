@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cybersoul Phone</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="background-glow glow-left"></div>
+    <div class="background-glow glow-right"></div>
+
+    <div class="app-shell">
+      <section class="story-panel">
+        <div class="story-panel__eyebrow">Amphoreus Link</div>
+        <h1 class="story-panel__title">昔涟的手机</h1>
+        <p class="story-panel__copy">
+          这里是一条只通向你与昔涟的通信线。她在翁法罗斯里生活、穿行、观察风与灯火，也会透过这部手机，耐心地接住你在另一个世界发来的消息。
+        </p>
+        <div class="story-panel__card">
+          <div class="story-panel__label">当前状态</div>
+          <div id="companion-status" class="story-panel__status">正在接通长廊彼端的信号…</div>
+        </div>
+      </section>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <div class="chat-header__eyebrow">Private Thread</div>
+            <h2 id="chat-title" class="chat-header__title">昔涟</h2>
+          </div>
+          <button id="refresh-button" class="ghost-button" type="button">刷新</button>
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite"></section>
+
+        <div id="notice" class="notice" hidden></div>
+
+        <form id="composer" class="composer">
+          <label class="composer__label" for="message-input">发给昔涟的话</label>
+          <div class="composer__row">
+            <textarea
+              id="message-input"
+              class="composer__input"
+              rows="1"
+              maxlength="1000"
+              placeholder="把今天的情绪、想法，或者一句晚安发给她。"
+            ></textarea>
+            <button id="send-button" class="send-button" type="submit">发送</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message__bubble"></div>
+        <div class="message__meta"></div>
+      </article>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

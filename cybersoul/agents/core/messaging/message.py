@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -43,9 +43,9 @@ class MessageBlock(BaseModel):
     model_config = ConfigDict(use_enum_values=False)
 
     type: MessageBlockType
-    text: str | None = None
-    uri: str | None = None
-    mime_type: str | None = None
+    text: Optional[str] = None
+    uri: Optional[str] = None
+    mime_type: Optional[str] = None
     data: Any = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -94,14 +94,15 @@ class Message(BaseModel):
     role: MessageRole
     content: str = ""
     blocks: list[MessageBlock] = Field(default_factory=list)
-    name: str | None = None
-    tool_call_id: str | None = None
+    name: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")
     def normalize_content(self) -> "Message":
-        if not self.content and not self.blocks:
+        if not self.content and not self.blocks and not self.tool_calls:
             raise ValueError("message requires content or blocks")
 
         if self.content and not self.blocks:
@@ -141,6 +142,8 @@ class Message(BaseModel):
             payload["name"] = self.name
         if self.tool_call_id:
             payload["tool_call_id"] = self.tool_call_id
+        if self.tool_calls:
+            payload["tool_calls"] = self.tool_calls
         if self.metadata:
             payload["metadata"] = self.metadata
 

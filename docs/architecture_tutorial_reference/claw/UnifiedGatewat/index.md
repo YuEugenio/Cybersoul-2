@@ -1,0 +1,255 @@
+# Chapter 6: The Unified Gateway — One Brain, Infinite Channels
+
+> **Core question**: How can a single Agent brain "live" simultaneously across WhatsApp, Telegram, Discord, and other channels — and recognize you on each one?
+
+---
+
+You spent half an hour chatting with an Agent on WhatsApp: project progress, code style preferences, plans for next week. The collaboration was smooth; it had already learned your working habits.
+
+The next day you open Telegram, wanting to pick up where you left off. The Agent's opening line: "Hello! How can I help you?"
+
+It doesn't recognize you anymore.
+
+This isn't a memory problem — those WhatsApp conversations still exist. The issue is that the Telegram instance simply has no idea what you did on WhatsApp. From its perspective, you're a stranger, and this is your first meeting.
+
+Add Discord and it happens again. N platforms, N "first meetings." This is the first hard problem an Agent must solve when facing the real world — **platform silos**.
+
+The unified gateway is the answer to tearing those silos down.
+
+---
+
+## I. The Problem of Platform Silos
+
+Every platform has its own "language." Your user ID on WhatsApp is a phone number; on Telegram it's a string of digits; on Discord it's a Snowflake ID. The same person appears as three strangers who don't know each other across three platforms.
+
+And it's more complicated than just different ID formats:
+
+| Platform | User ID Format | Message Field | Auth Method |
+|----------|---------------|---------------|-------------|
+| Telegram | Pure numeric (e.g. `123456789`) | `message.text` | Bot Token |
+| Discord | Snowflake ID (17–20 digits) | `message.content` | OAuth2 |
+| Feishu | `open_id` (prefixed with `ou_`) | Nested JSON | tenant_access_token |
+
+Three parsing schemas, three authentication flows. Without an abstraction layer, every new platform means carving out space in the system core and cramming in a batch of platform-specific code. Six months later, "Telegram support" and "intent reasoning" are deeply tangled — changing anything feels like defusing a bomb.
+
+The sharpest pain isn't the format differences; it's **identity fragmentation**: the Agent doesn't know that "those three strangers are actually the same you."
+
+---
+
+## II. The Unified Gateway: One Entry Point, Infinite Channels
+
+The core idea behind a Gateway is simple: place a translation layer between the platforms and the Agent brain.
+
+```
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐
+│ WhatsApp │  │ Telegram │  │ Discord  │  │ Feishu │
+└────┬─────┘  └────┬─────┘  └────┬─────┘  └───┬────┘
+     │             │             │             │
+     │    Per-platform adapters (dialect → common tongue)    │
+     └──────────────────┬──────────────────────┘
+                        │  Unified message format
+                 ┌──────┴──────┐
+                 │   Gateway   │
+                 └──────┬──────┘
+                        │
+                 ┌──────┴──────┐
+                 │  Agent Brain │  (always sees only "user" and "message")
+                 └─────────────┘
+```
+
+The Agent brain always receives messages in a unified format: who sent it, which session it belongs to, and what was said. It has no idea — and never needs to know — whether a message came from Telegram or Discord.
+
+The Gateway carries three core responsibilities. **Identity resolution**: translating each platform's opaque ID into "this is Alice." **Session routing**: dispatching messages from different channels to the correct conversation context without cross-contamination. **Format translation**: normalizing each platform's raw message structure into the standard format the Agent can process.
+
+Once this boundary is established, the system gains freedom to evolve. The Agent brain's reasoning capabilities can be upgraded independently, undisturbed by channel churn; integrating a new platform requires zero changes to the Agent's code.
+
+---
+
+## III. The Adapter Pattern: The Cost of Onboarding a New Platform
+
+What should the cost of adding a new platform be?
+
+The ideal answer: **understand that platform's API, then implement one interface**. Zero changes to the Agent core.
+
+OpenClaw achieves this through the `ChannelPlugin` interface. Each platform gets one adapter, responsible for bidirectional translation:
+
+```
+Inbound (user → Agent)
+  Raw platform event  →  Adapter parses  →  Unified Message format  →  Agent
+
+Outbound (Agent → user)
+  Agent reply  →  Adapter renders  →  Platform-native format  →  User
+```
+
+The adapter is the translator, present at both ends of the pipeline. Inbound, it translates "platform dialect" into "system common tongue." Outbound, it translates the common tongue back into dialect. The Agent brain lives entirely in the world of common tongue, blissfully unaware that dialects exist.
+
+The interface itself is intentionally two-tiered to keep the barrier to entry low:
+
+```
+ChannelPlugin Interface
+├── [Required] Identity layer      ── the channel's unique identifier
+├── [Required] Message layer       ── receive and send messages
+└── [Optional] Extended capabilities
+        ├── Streaming replies (typewriter effect)
+        ├── Interactive buttons (Feishu cards, Discord components)
+        ├── OAuth authentication
+        └── Thread replies
+```
+
+A prototype adapter for a new platform only needs to implement the two required layers to get a working flow — receive messages, send messages. Additional capabilities can be added progressively as needed. Low floor, high ceiling: this is the hallmark of good extensible interface design.
+
+There is an important design philosophy here: **let each platform shine**. The Gateway should not flatten all platforms down to the lowest common denominator — if Discord supports streaming output, let it stream; if Feishu supports a "typing" indicator, let it show. Platform-specific capabilities are declared through configuration, not through `if-else` branches buried in the code.
+
+Take Discord and Feishu as examples — their capability toggles look quite different:
+
+```json5
+// Discord: enable streaming, so users see the Agent's output in real time
+{
+  channels: {
+    discord: {
+      enabled: true,
+      streaming: true,
+      actions: { messages: true, reactions: true, threads: true }
+    }
+  }
+}
+
+// Feishu: enable the typing indicator, giving users feedback while the Agent thinks
+{
+  channels: {
+    feishu: {
+      enabled: true,
+      typingIndicator: true
+    }
+  }
+}
+```
+
+Two platforms, two sets of capability switches, each playing to its strengths.
+
+---
+
+## IV. Graceful Degradation and Cross-Platform Identity
+
+### Graceful Degradation: Unified Without Being Monotonous
+
+The Agent always outputs replies in Markdown. This is a deliberate design choice: Markdown expresses content intent, not platform presentation. How that content is actually rendered is up to each platform's adapter.
+
+```
+            Agent outputs a Markdown reply
+                        │
+          ┌─────────────┼──────────────┐
+          │             │              │
+   Discord adapter  Feishu adapter  Plain-text platform
+          │             │              │
+   Embedded message  Interactive     Strip formatting
+   card with syntax  button card     marks, content
+   highlighted code  "Confirm/Cancel" fully preserved
+          │             │              │
+          └─────────────┼──────────────┘
+                        │
+              User sees the form best suited to their platform
+```
+
+Discord renders Markdown as structured cards with colored borders; Feishu turns "please confirm deployment" into two clickable buttons; platforms without rich text simply strip the formatting marks and present the content clearly as plain text.
+
+The information is conveyed in full; only the "wrapper" differs, not the "content." **Unified without being monotonous, diverse without being chaotic** — this is the core value of the Gateway's outbound design.
+
+Beyond format rendering, platform capability differences also show up in **interactive feedback**. A typical example: you ask the Agent on Discord to "analyze this project" — that takes a few seconds. With Discord streaming enabled, the system sends a placeholder message first, then continuously edits it as the Agent generates content — users watch the message update in real time, as if they can see the other side typing. Once the Agent finishes, the placeholder becomes the complete answer. Feishu lacks this capability, but Feishu has a typing indicator, which equally lets users know the Agent is thinking rather than silent.
+
+Platforms with the capability provide a better experience; platforms without it still ensure basic functionality — that is the practical meaning of graceful degradation.
+
+### Cross-Platform Identity Linking: One Memory, Everywhere
+
+The identity fragmentation problem is solved through `identityLinks` configuration. The approach is explicit declaration: IDs on different platforms belong to the same person.
+
+The first step is ID normalization. Every platform's user ID is converted to a `platform:rawId` format:
+
+```
+telegram:123456789
+discord:987654321012345678
+slack:U12345ABC
+```
+
+The second step is explicit binding. Declare in configuration that these three IDs all belong to "Alice":
+
+```
+identityLinks:
+  "alice": ["telegram:123456789", "discord:987654321012345678"]
+```
+
+Once the binding is established, no matter which channel Alice messages from, the Agent recognizes her:
+
+```
+Alice sends a message on Telegram
+  → Gateway normalizes ID: telegram:123456789
+  → Queries identityLinks → matches "alice"
+  → Loads Alice's preferences and memory → generates reply based on her habits
+
+The next day Alice switches to Discord
+  → Gateway normalizes ID: discord:987654321012345678
+  → Queries identityLinks → matches "alice" again
+  → Agent still recognizes her, preferences fully preserved
+```
+
+That said, not all information should be shared across channels:
+
+| Information Type | Scope | Rationale |
+|-----------------|-------|-----------|
+| User preferences (code style, language habits, etc.) | Globally shared | This is "knowing you as a person" — not channel-specific |
+| Current conversation context | Session-isolated | Conversations on different channels have their own rhythm and purpose |
+
+Think of it as the Agent holding **two notebooks**:
+
+- **Notebook one (shared memory)**: records long-term cross-channel information — your code style preferences, preferred languages, project conventions. All channels share this notebook; no matter which platform you arrive from, the Agent opens the same one.
+- **Notebook two (independent context)**: each session's own conversation history. What you discussed on WhatsApp isn't in the Telegram notebook; what you asked on Telegram isn't in the WhatsApp notebook either.
+
+This is why the same Agent recognizes you on both WhatsApp and Telegram (same preferences notebook), yet the conversations on each don't bleed into each other (each session's context notebook is isolated). **Channels are temporary choices; identity is a persistent reality.**
+
+---
+
+## V. Fault Tolerance and Message Splitting
+
+### Error Classification: What Can Be Retried, What Cannot
+
+Network hiccups, platform API rate limits, expired tokens — in a multi-channel architecture, send failures are a fact of life. The Gateway doesn't simply surface the error and walk away; it decides what to do based on the error type:
+
+| Error Type | Description | Handling Strategy |
+|-----------|-------------|-------------------|
+| Channel not enabled | Channel is configured as disabled or not started | No retry — fail immediately (retrying won't help) |
+| Rate limit | Platform returns a 429 error | Wait, then retry (temporary — will clear soon) |
+| Transient error | Network hiccup, connection timeout | Automatic retry with exponential backoff |
+| Hard send failure | Content violation, insufficient permissions | No retry — log the error, notify the user |
+
+The core logic behind this classification: **determine whether the failure is temporary or permanent**. Temporary failures get a wait-and-retry; permanent failures fail fast and notify early.
+
+When encountering retryable errors, the system uses an **exponential backoff** strategy — the wait time grows exponentially before each retry, allowing automatic recovery from transient failures without hammering the platform API.
+
+### Long Message Auto-Splitting: Code Block Boundary Awareness
+
+Different platforms impose length limits on individual messages (Discord defaults to 2000 characters, Telegram defaults to roughly 4096). When the Agent produces an oversized reply, the Gateway automatically splits it into multiple sends.
+
+But there is an engineering detail here: **splitting must recognize code block boundaries and never cut in the middle of a code block**. Imagine a Python function split in half — the first message has only the top portion, and the second message starts abruptly mid-function. Readability suffers badly. A smart splitting strategy finds appropriate split points (paragraph boundaries, blank lines) and ensures every segment is semantically complete.
+
+---
+
+## Summary
+
+| Core Capability | Implementation |
+|----------------|----------------|
+| Unified entry point across platforms | Gateway as the single processing layer for all channel messages |
+| Low-cost new platform onboarding | `ChannelPlugin` adapter interface — zero changes to core code |
+| Consistent cross-platform experience | Bidirectional adapter translation — Agent sees only unified format |
+| Graceful degradation | Outbound rendering decided by platform capability — content unchanged, wrapper varies |
+| Unified cross-platform identity | `identityLinks` explicit binding — preferences shared globally, context isolated per session |
+| Fault tolerance and retry | Error-type-based handling: transient errors get exponential backoff retry, permanent errors fail fast |
+| Long message splitting | Auto-split by `textChunkLimit` — code block boundary aware, never cuts inside a code block |
+
+The Gateway is the Agent's sensory system. It absorbs all the complexity of the external world — different IDs, formats, and authentication schemes across platforms — entirely within its own layer, letting the Agent brain live in a pure world of just "users" and "messages." The senses handle normalization; the brain handles reasoning. The clear, stable boundary between them is the fundamental guarantee of a long-lived, healthy system.
+
+A well-designed Gateway is invisible — it does its work in silence, so the Agent can focus on what it's actually there to do.
+
+
+---
+
+→ [Chapter 7: The Security Sandbox](../chapter7/index.md)
